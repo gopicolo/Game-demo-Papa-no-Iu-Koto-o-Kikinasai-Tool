@@ -1,0 +1,144 @@
+import os
+import struct
+from pathlib import Path
+from collections import defaultdict
+
+# --- CONFIGURAÇÃO ---
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+TEXT_ENCODING = "shift_jis"
+POINTER_TABLE_CANDIDATES = [0x35, 0x49, 0x21, 0x7B, 0x85, 0x80, 0xDF, 0x2BA, 0x120]
+
+TERMINATORS = [
+    b'\x00', b'\x00\x00', b'\x00\x00\x00', b'\x00\x00\x00\x00',
+    b'\x0A\x00', b'\x0A\x00\x00', b'\x0A\x00\x00\x00', b'\x0A\x00\x00\x00\x00',
+]
+
+def find_terminator(data, start_offset):
+    max_len = len(data)
+    for i in range(start_offset, max_len):
+        for term in TERMINATORS:
+            if i + len(term) <= max_len and data[i:i+len(term)] == term:
+                raw_text = data[start_offset:i]
+                next_pos = i + len(term)
+                while next_pos < max_len and data[next_pos] == 0x00:
+                    next_pos += 1
+                return raw_text, next_pos
+    return data[start_offset:max_len], max_len
+
+def find_pointer_locations(bin_data, text_offsets):
+    """
+    MODIFICADO: Encontra TODAS as localizações de ponteiros para cada offset de texto.
+    Retorna um dicionário mapeando um offset de texto para uma LISTA de localizações de ponteiros.
+    """
+    # Usamos defaultdict(list) para que cada nova chave já comece com uma lista vazia.
+    pointer_locations = defaultdict(list)
+    data_len = len(bin_data)
+    for i in range(data_len - 1):
+        # Lê um valor de 2 bytes (short) em modo little-endian
+        val = struct.unpack_from("<H", bin_data, i)[0]
+        if val in text_offsets:
+            # Em vez de substituir, nós adicionamos o ponteiro à lista.
+            pointer_locations[val].append(i)
+    return pointer_locations
+
+def get_first_valid_pointer_offset(bin_data):
+    data_len = len(bin_data)
+    for candidate in POINTER_TABLE_CANDIDATES:
+        try:
+            val = struct.unpack_from("<H", bin_data, candidate)[0]
+            if 0 < val < data_len:
+                print(f"[DEBUG] Ponteiro inicial válido encontrado em 0x{candidate:04X}: 0x{val:04X}")
+                return val, candidate
+        except (struct.error, IndexError):
+            continue
+    return None, None
+
+def process_file(file_path: Path):
+    try:
+        with file_path.open("rb") as f:
+            bin_data = f.read()
+
+        data_len = len(bin_data)
+
+        first_text_offset, _ = get_first_valid_pointer_offset(bin_data)
+        if first_text_offset is None:
+            print(f"[AVISO] Nenhum ponteiro válido encontrado em {file_path.name}.")
+            return
+
+        final_blocks = []
+        current_offset = first_text_offset
+        extracted_offsets = set()
+
+        while current_offset < data_len:
+            if current_offset in extracted_offsets:
+                break # Evita loops infinitos se os terminadores não forem perfeitos
+
+            raw_str, next_pos = find_terminator(bin_data, current_offset)
+            
+            if not raw_str:
+                if next_pos <= current_offset: # Prevenção de loop
+                     break
+                current_offset = next_pos
+                continue
+
+            try:
+                decoded_str = raw_str.decode(TEXT_ENCODING).strip()
+                if decoded_str:
+                    final_blocks.append({
+                        "ptr_locs": [], # MODIFICADO: Agora é uma lista 'ptr_locs'
+                        "text_off": current_offset,
+                        "text": decoded_str
+                    })
+                    extracted_offsets.add(current_offset)
+            except UnicodeDecodeError:
+                pass
+            
+            if next_pos <= current_offset: # Prevenção de loop
+                break
+            current_offset = next_pos
+
+        if not final_blocks:
+            print(f"[AVISO] Nenhuma string extraída de {file_path.name}")
+            return
+
+        text_offset_set = set(block["text_off"] for block in final_blocks)
+        pointer_map = find_pointer_locations(bin_data, text_offset_set)
+
+        for block in final_blocks:
+            off = block["text_off"]
+            # O .get() agora retorna uma lista de ponteiros ou None se não houver nenhum
+            block["ptr_locs"] = pointer_map.get(off, [])
+
+        output_path = Path(OUTPUT_DIR) / (file_path.stem + "_extracted.txt")
+        with output_path.open("w", encoding="utf-8") as out:
+            for block in final_blocks:
+                # MODIFICADO: Formata a lista de ponteiros
+                if not block["ptr_locs"]:
+                    ptr_str = "???"
+                else:
+                    # Ordena para consistência e formata como "0xABCD, 0xEFGH, ..."
+                    sorted_locs = sorted(block["ptr_locs"])
+                    ptr_str = ", ".join([f"0x{loc:04X}" for loc in sorted_locs])
+                
+                out.write(f"# POINTER BLOCK @ {ptr_str} (Text at 0x{block['text_off']:04X})\n")
+                out.write(f"{block['text']}\n\n")
+
+        print(f"[OK] {file_path.name} extraído com sucesso. Encontradas {len(final_blocks)} strings.")
+
+    except Exception as e:
+        print(f"[ERRO] Falha ao processar {file_path.name}: {e}")
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    input_files = list(Path(INPUT_DIR).glob("*.bin"))
+    if not input_files:
+        print(f"Nenhum arquivo .bin encontrado na pasta '{INPUT_DIR}'.")
+        return
+    print(f"Encontrados {len(input_files)} arquivos para processar...")
+    for file in input_files:
+        process_file(file)
+    print("Processamento concluído.")
+
+if __name__ == "__main__":
+    main()
