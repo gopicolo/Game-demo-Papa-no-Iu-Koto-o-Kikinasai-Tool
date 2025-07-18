@@ -1,10 +1,22 @@
 
 # PapaKiki PSP - Script Dumper & Repacker
 
-This toolset allows you to extract and reinsert text from `.bin` script files in the PSP game titled:
+This toolset was created by gopicolo for you to extract and reinsert text from `.bin` script files in the PSP game titled:
 
 **Game demo, Papa no Iu Koto o Kikinasai!**
 
+## 📁 Folder Structure
+
+```
+PapaKiki-PSP-Tool/
+├── dump.py
+├── repack.py
+├── input/         # Original .bin files
+├── output/        # Extracted or edited text files
+└── modified/      # Final repacked .bin files
+```
+
+---
 These script files are located in:
 
 ```
@@ -15,13 +27,6 @@ It consists of two Python scripts:
 
 - `dump.py`: Extracts text from binary `.bin` files into editable `.txt` files.
 - `repack.py`: Reinserts modified text from `.txt` files back into `.bin` files, updating all necessary pointers.
-
----
-
-## 🔧 Requirements
-
-- Python 3.7+
-- No external libraries needed (only built-in modules are used)
 
 ---
 
@@ -39,13 +44,13 @@ It consists of two Python scripts:
 Each extracted file will contain blocks like:
 
 ```text
-# POINTER BLOCK @ 0x28C8, 0x49E2 (Text at 0x3010)
-Three girls who have never really been part of my family...
-Now, they've become my new daughters...
+# POINTER BLOCK @ 0x01D9 (Text at 0x29D0)
+「その頃、まだ高校生だった姉さんは
+　誰の助けも借りずに
+　たった一人で俺を育ててくれた」
 ```
 
 - You can freely edit the lines after the pointer block headers.
-- No special characters need to be preserved.
 
 ---
 
@@ -72,26 +77,9 @@ Now, they've become my new daughters...
 
 ---
 
-## 💡 Example Use Case
+## 🔧 Requirements
 
-Want to translate the game into English or Portuguese? This tool will let you dump all dialogues, edit them freely in a text editor, and rebuild the game’s script files.
-
----
-
-## 📁 Folder Structure
-
-```
-PapaKiki-PSP-Tool/
-├── dump.py
-├── repack.py
-├── input/         # Original .bin files
-├── output/        # Extracted or edited text files
-└── modified/      # Final repacked .bin files
-```
+- Python 3.7+
+- No external libraries needed (only built-in modules are used)
 
 ---
-
-## 🧠 Credits
-
-Made by [gopicolo](https://github.com/gopicolo) for translation and modding purposes.  
-Tested with the PSP game: *Game demo, Papa no Iu Koto o Kikinasai!*
