@@ -1,5 +1,6 @@
 import os
 import struct
+import string
 from pathlib import Path
 from collections import defaultdict
 
@@ -27,19 +28,18 @@ def find_terminator(data, start_offset):
     return data[start_offset:max_len], max_len
 
 def find_pointer_locations(bin_data, text_offsets):
-    """
-    MODIFICADO: Encontra TODAS as localizações de ponteiros para cada offset de texto.
-    Retorna um dicionário mapeando um offset de texto para uma LISTA de localizações de ponteiros.
-    """
-    # Usamos defaultdict(list) para que cada nova chave já comece com uma lista vazia.
     pointer_locations = defaultdict(list)
     data_len = len(bin_data)
-    for i in range(data_len - 1):
-        # Lê um valor de 2 bytes (short) em modo little-endian
-        val = struct.unpack_from("<H", bin_data, i)[0]
-        if val in text_offsets:
-            # Em vez de substituir, nós adicionamos o ponteiro à lista.
-            pointer_locations[val].append(i)
+
+    for i in range(data_len - 4):
+        val_2 = struct.unpack_from("<H", bin_data, i)[0]
+        val_4 = struct.unpack_from("<I", bin_data, i)[0]
+
+        if val_2 in text_offsets:
+            pointer_locations[val_2].append(i)
+        elif val_4 in text_offsets:
+            pointer_locations[val_4].append(i)
+
     return pointer_locations
 
 def get_first_valid_pointer_offset(bin_data):
@@ -54,13 +54,23 @@ def get_first_valid_pointer_offset(bin_data):
             continue
     return None, None
 
+def is_valid_text(text: str):
+    return len(text.strip()) >= 4 and all(c in string.printable for c in text)
+
+def find_valid_start_index(blocks):
+    for i in range(len(blocks) - 1):
+        b1 = blocks[i]
+        b2 = blocks[i + 1]
+        if b1["ptr_locs"] and is_valid_text(b1["text"]) and b2["ptr_locs"] and is_valid_text(b2["text"]):
+            return i
+    return 0
+
 def process_file(file_path: Path):
     try:
         with file_path.open("rb") as f:
             bin_data = f.read()
 
         data_len = len(bin_data)
-
         first_text_offset, _ = get_first_valid_pointer_offset(bin_data)
         if first_text_offset is None:
             print(f"[AVISO] Nenhum ponteiro válido encontrado em {file_path.name}.")
@@ -72,13 +82,13 @@ def process_file(file_path: Path):
 
         while current_offset < data_len:
             if current_offset in extracted_offsets:
-                break # Evita loops infinitos se os terminadores não forem perfeitos
+                break
 
             raw_str, next_pos = find_terminator(bin_data, current_offset)
-            
+
             if not raw_str:
-                if next_pos <= current_offset: # Prevenção de loop
-                     break
+                if next_pos <= current_offset:
+                    break
                 current_offset = next_pos
                 continue
 
@@ -86,15 +96,15 @@ def process_file(file_path: Path):
                 decoded_str = raw_str.decode(TEXT_ENCODING).strip()
                 if decoded_str:
                     final_blocks.append({
-                        "ptr_locs": [], # MODIFICADO: Agora é uma lista 'ptr_locs'
+                        "ptr_locs": [],
                         "text_off": current_offset,
                         "text": decoded_str
                     })
                     extracted_offsets.add(current_offset)
             except UnicodeDecodeError:
                 pass
-            
-            if next_pos <= current_offset: # Prevenção de loop
+
+            if next_pos <= current_offset:
                 break
             current_offset = next_pos
 
@@ -107,24 +117,32 @@ def process_file(file_path: Path):
 
         for block in final_blocks:
             off = block["text_off"]
-            # O .get() agora retorna uma lista de ponteiros ou None se não houver nenhum
             block["ptr_locs"] = pointer_map.get(off, [])
+
+        has_unknown_pointers = any(not block["ptr_locs"] for block in final_blocks)
+
+        if has_unknown_pointers:
+            start_idx = find_valid_start_index(final_blocks)
+            filtered_blocks = final_blocks[start_idx:]
+        else:
+            filtered_blocks = final_blocks
+
+        if not filtered_blocks:
+            print(f"[AVISO] Todos os blocos foram filtrados de {file_path.name}")
+            return
 
         output_path = Path(OUTPUT_DIR) / (file_path.stem + "_extracted.txt")
         with output_path.open("w", encoding="utf-8") as out:
-            for block in final_blocks:
-                # MODIFICADO: Formata a lista de ponteiros
+            for block in filtered_blocks:
                 if not block["ptr_locs"]:
                     ptr_str = "???"
                 else:
-                    # Ordena para consistência e formata como "0xABCD, 0xEFGH, ..."
                     sorted_locs = sorted(block["ptr_locs"])
                     ptr_str = ", ".join([f"0x{loc:04X}" for loc in sorted_locs])
-                
-                out.write(f"# POINTER BLOCK @ {ptr_str} (Text at 0x{block['text_off']:04X})\n")
+                out.write(f"# POINTER BLOCK @ {ptr_str} (Text at 0x{block['text_off']:X})\n")
                 out.write(f"{block['text']}\n\n")
 
-        print(f"[OK] {file_path.name} extraído com sucesso. Encontradas {len(final_blocks)} strings.")
+        print(f"[OK] {file_path.name} extraído com sucesso. {len(filtered_blocks)} strings mantidas.")
 
     except Exception as e:
         print(f"[ERRO] Falha ao processar {file_path.name}: {e}")
