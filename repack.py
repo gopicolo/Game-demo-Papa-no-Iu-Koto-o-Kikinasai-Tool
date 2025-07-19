@@ -12,38 +12,30 @@ TEXT_ENCODING = "shift_jis"
 TERMINATOR = b'\x00'
 
 def parse_extracted_file(txt_path: Path):
-    """
-    MODIFICADO: Analisa o arquivo de texto e extrai a lista de ponteiros para cada bloco.
-    """
     blocks = []
     with txt_path.open("r", encoding="utf-8") as f:
         content = f.read()
 
-    # Regex MODIFICADO: Captura o grupo inteiro de ponteiros como uma string.
     pattern = re.compile(
-        r"# POINTER BLOCK @ (.*?) \(Text at 0x([0-9A-Fa-f]{4})\)\n(.*?)\n\n",
+        r"# POINTER BLOCK @ (.*?) \(Text at 0x([0-9A-Fa-f]+)\)\n(.*?)\n\n",
         re.DOTALL
     )
 
     for match in pattern.finditer(content):
-        # ptrs_str pode ser "???" ou "0x1234, 0x5678, ..."
         ptrs_str, text_off_str, text_content = match.groups()
-
         ptr_locs = []
         if ptrs_str.strip() != "???":
-            # Divide a string pela vírgula, remove espaços e converte de hex para int
             hex_values = ptrs_str.split(',')
             ptr_locs = [int(p.strip(), 16) for p in hex_values]
-        
+
         text_off = int(text_off_str, 16)
         text = text_content.strip()
-
         blocks.append({
-            "ptr_locs": ptr_locs, # MODIFICADO: Agora é uma lista 'ptr_locs'
+            "ptr_locs": ptr_locs,
             "text_off": text_off,
             "text": text
         })
-    
+
     return blocks
 
 def repack_file(txt_file_path: Path):
@@ -69,18 +61,21 @@ def repack_file(txt_file_path: Path):
         new_text_blob = bytearray()
 
         for block in text_blocks:
-            ptr_locations = block['ptr_locs'] # É uma lista!
+            ptr_locations = block['ptr_locs']
             encoded_text = block['text'].encode(TEXT_ENCODING)
-            
-            # O novo valor do ponteiro é o offset atual onde o texto será escrito
             new_pointer_value = current_text_offset
-            
-            # Se a lista de ponteiros não estiver vazia, atualiza CADA um.
-            if ptr_locations:
+
+            # Decide tamanho do ponteiro baseado no valor
+            if new_pointer_value <= 0xFFFF:
                 pointer_bytes = struct.pack("<H", new_pointer_value)
-                # MODIFICADO: Itera sobre cada localização de ponteiro e a atualiza.
-                for loc in ptr_locations:
-                    bin_data[loc : loc + 2] = pointer_bytes
+                pointer_size = 2
+            else:
+                pointer_bytes = struct.pack("<I", new_pointer_value)
+                pointer_size = 4
+
+            # Atualiza os ponteiros
+            for loc in ptr_locations:
+                bin_data[loc : loc + pointer_size] = pointer_bytes
 
             new_text_blob.extend(encoded_text)
             new_text_blob.extend(TERMINATOR)
@@ -91,7 +86,7 @@ def repack_file(txt_file_path: Path):
 
         with repacked_bin_path.open("wb") as f:
             f.write(final_data)
-            
+
         print(f"[OK] {original_bin_path.name} reempacotado com sucesso para {repacked_bin_path.name}")
 
     except Exception as e:
@@ -106,14 +101,14 @@ def main():
     if not Path(MODIFIED_TXT_DIR).exists():
         print(f"ERRO: A pasta de textos modificados '{MODIFIED_TXT_DIR}' não foi encontrada.")
         return
-        
+
     os.makedirs(REPACKED_BIN_DIR, exist_ok=True)
 
     modified_files = list(Path(MODIFIED_TXT_DIR).glob("*_extracted.txt"))
     if not modified_files:
         print(f"Nenhum arquivo _extracted.txt encontrado na pasta '{MODIFIED_TXT_DIR}'.")
         return
-        
+
     print(f"Encontrados {len(modified_files)} arquivos de texto para reempacotar...")
     for file in modified_files:
         repack_file(file)
