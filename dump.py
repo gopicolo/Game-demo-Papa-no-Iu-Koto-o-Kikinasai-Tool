@@ -65,6 +65,44 @@ def find_valid_start_index(blocks):
             return i
     return 0
 
+def filter_cpt_blocks(blocks):
+    """
+    Se encontrar uma string com 'CPT' ou 'SCPT',
+    apagar essa string e todas as que vêm depois,
+    até achar uma string com pelo menos 7 caracteres.
+    Se não achar nenhuma string com >=7 caracteres depois,
+    retorna lista vazia e flag indicando que tudo deve ser removido.
+    """
+    found_trigger = False
+    filtered = []
+    skip_mode = False
+    valid_found_after_trigger = False
+
+    for block in blocks:
+        text = block["text"]
+        if not found_trigger:
+            if "CPT" in text or "SCPT" in text:
+                found_trigger = True
+                skip_mode = True
+                continue
+            else:
+                filtered.append(block)
+        else:
+            if skip_mode:
+                if len(text.strip()) >= 5:
+                    skip_mode = False
+                    valid_found_after_trigger = True
+                    filtered.append(block)
+                else:
+                    continue
+            else:
+                filtered.append(block)
+
+    if found_trigger and not valid_found_after_trigger:
+        return [], False
+
+    return filtered, True
+
 def process_file(file_path: Path):
     try:
         with file_path.open("rb") as f:
@@ -112,20 +150,25 @@ def process_file(file_path: Path):
             print(f"[AVISO] Nenhuma string extraída de {file_path.name}")
             return
 
-        text_offset_set = set(block["text_off"] for block in final_blocks)
+        # Aplica o filtro CPT solicitado:
+        filtered_blocks, valid = filter_cpt_blocks(final_blocks)
+
+        if not valid:
+            print(f"[AVISO] O script em {file_path.name} contém 'CPT' mas nenhuma string válida após o filtro. Todo o texto será removido.")
+            return  # Não salva o arquivo nem processa mais
+
+        text_offset_set = set(block["text_off"] for block in filtered_blocks)
         pointer_map = find_pointer_locations(bin_data, text_offset_set)
 
-        for block in final_blocks:
+        for block in filtered_blocks:
             off = block["text_off"]
             block["ptr_locs"] = pointer_map.get(off, [])
 
-        has_unknown_pointers = any(not block["ptr_locs"] for block in final_blocks)
+        has_unknown_pointers = any(not block["ptr_locs"] for block in filtered_blocks)
 
         if has_unknown_pointers:
-            start_idx = find_valid_start_index(final_blocks)
-            filtered_blocks = final_blocks[start_idx:]
-        else:
-            filtered_blocks = final_blocks
+            start_idx = find_valid_start_index(filtered_blocks)
+            filtered_blocks = filtered_blocks[start_idx:]
 
         if not filtered_blocks:
             print(f"[AVISO] Todos os blocos foram filtrados de {file_path.name}")
